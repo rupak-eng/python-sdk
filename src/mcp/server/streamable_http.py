@@ -626,7 +626,14 @@ class StreamableHTTPServerTransport:
 
                 # Process the message after sending the response
                 session_message = SessionMessage(message, metadata=self._message_metadata(request))
-                await writer.send(session_message)
+                try:
+                    await writer.send(session_message)
+                except anyio.ClosedResourceError:
+                    # The session terminated after the 202 was sent: no peer on the
+                    # wire can observe the message, so drop it instead of falling
+                    # into the generic error handler, which would attempt a second
+                    # HTTP response.
+                    logger.debug("Dropping notification/response: session terminated")
 
                 return
 
