@@ -3,11 +3,12 @@ from typing import Any
 from urllib.parse import urlparse
 
 from pydantic import AnyHttpUrl
+from starlette.datastructures import Headers
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route, request_response  # type: ignore
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from mcp.server.auth.handlers.authorize import AuthorizationHandler
 from mcp.server.auth.handlers.metadata import MetadataHandler, ProtectedResourceMetadataHandler
@@ -52,13 +53,33 @@ REVOCATION_PATH = "/revoke"
 ID_JAG_GRANT_PROFILE = "urn:ietf:params:oauth:grant-profile:id-jag"
 
 
+class _CorsMiddleware:
+    """CORSMiddleware that answers non-preflight OPTIONS with an empty 204.
+
+    CORSMiddleware only short-circuits true preflights (Origin plus
+    Access-Control-Request-Method); a plain OPTIONS request would fall
+    through to the body-reading handler behind it, so answer it here instead.
+    """
+
+    def __init__(self, app: ASGIApp, allow_methods: list[str]) -> None:
+        self._cors = CORSMiddleware(
+            app=app,
+            allow_origins="*",
+            allow_methods=allow_methods,
+            allow_headers=[MCP_PROTOCOL_VERSION_HEADER],
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["method"] == "OPTIONS":
+            headers = Headers(scope=scope)
+            if "origin" not in headers or "access-control-request-method" not in headers:
+                await Response(status_code=204)(scope, receive, send)
+                return
+        await self._cors(scope, receive, send)
+
+
 def _cors(app: ASGIApp, allow_methods: list[str]) -> ASGIApp:
-    return CORSMiddleware(
-        app=app,
-        allow_origins="*",
-        allow_methods=allow_methods,
-        allow_headers=[MCP_PROTOCOL_VERSION_HEADER],
-    )
+    return _CorsMiddleware(app, allow_methods)
 
 
 def _body_limited(app: ASGIApp) -> ASGIApp:

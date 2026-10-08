@@ -302,10 +302,8 @@ _FORM = "application/x-www-form-urlencoded"
         ("POST", "/revoke", _FORM),
         ("POST", "/register", "application/json"),
         ("POST", "/authorize", _FORM),
-        # The other methods these routes accept reach the same body-reading handlers.
-        ("OPTIONS", "/token", _FORM),
-        ("OPTIONS", "/revoke", _FORM),
-        ("OPTIONS", "/register", "application/json"),
+        # OPTIONS is answered empty by the CORS layer before any body is read (see #3652),
+        # so it never reaches the body-reading handlers.
         ("HEAD", "/authorize", _FORM),
     ],
 )
@@ -317,6 +315,17 @@ async def test_oversized_request_body_returns_413(
         method, path, content=b"x" * (DEFAULT_MAX_REQUEST_BODY_SIZE + 1), headers={"Content-Type": content_type}
     )
     assert response.status_code == 413
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("path", ["/token", "/revoke", "/register"])
+async def test_oversized_options_body_is_answered_empty_without_reading_it(client: httpx2.AsyncClient, path: str):
+    """Regression pin for #3652: the non-preflight OPTIONS short-circuit sits outside the
+    body limit, so even an over-limit body is never read — 204, not 413."""
+    response = await client.request(
+        "OPTIONS", path, content=b"x" * (DEFAULT_MAX_REQUEST_BODY_SIZE + 1), headers={"Content-Type": _FORM}
+    )
+    assert response.status_code == 204
 
 
 @pytest.mark.anyio
